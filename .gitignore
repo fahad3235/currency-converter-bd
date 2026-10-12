@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# test artifacts
+tests/dl-test/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+
+# local env (never commit secrets)
+.env
+.env.*

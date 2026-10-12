@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Currency Converter BD — offline BDT converter</title>
+<meta name="description" content="Free, fully offline bilingual (Bangla/English) BDT currency converter with an editable rate board.">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <div>
+      <h1 id="t-title">Currency Converter BD</h1>
+      <p class="subtitle" id="t-subtitle">Offline BDT currency converter — rates you control</p>
+    </div>
+    <button id="langBtn" class="lang-btn" type="button">বাংলা</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="card" aria-labelledby="conv-h">
+    <h2 id="conv-h"><span id="t-converter">Converter</span></h2>
+    <div class="conv-grid">
+      <label class="field">
+        <span id="t-amount">Amount</span>
+        <input id="amount" type="text" inputmode="decimal" value="100" autocomplete="off">
+      </label>
+      <label class="field">
+        <span id="t-from">From</span>
+        <select id="fromCur"></select>
+      </label>
+      <button id="swapBtn" class="swap" type="button" aria-label="Swap currencies" title="Swap currencies">⇄</button>
+      <label class="field">
+        <span id="t-to">To</span>
+        <select id="toCur"></select>
+      </label>
+    </div>
+    <p class="error" id="amountError" hidden></p>
+    <div class="result" id="result" aria-live="polite"></div>
+    <p class="rate-line" id="rateLine"></p>
+  </section>
+
+  <section class="card" aria-labelledby="board-h">
+    <h2 id="board-h"><span id="t-rateBoard">Exchange rate board</span></h2>
+    <p class="muted" id="t-rateBoardSub">BDT per 1 unit — tap a value to edit</p>
+    <p class="muted"><span id="t-updated">Last updated</span>: <strong id="updatedStamp">never</strong></p>
+    <div class="table-wrap">
+      <table id="rateTable">
+        <thead><tr><th>Code</th><th id="th-name">Currency</th><th id="th-rate">BDT / 1 unit</th></tr></thead>
+        <tbody id="rateBody"></tbody>
+      </table>
+    </div>
+    <p class="error" id="rateError" hidden></p>
+    <div class="btn-row">
+      <button id="resetBtn" class="btn ghost" type="button">Reset to defaults</button>
+      <button id="exportBtn" class="btn ghost" type="button">Export rates</button>
+      <button id="importBtn" class="btn ghost" type="button">Import rates</button>
+      <input id="importFile" type="file" accept="application/json,.json" hidden>
+    </div>
+  </section>
+
+  <footer class="disclaimer">
+    <p id="t-disclaimer"></p>
+  </footer>
+</main>
+
+<script src="js/app.js"></script>
+<script>
+(function () {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  let lang = 'en';
+  try { lang = localStorage.getItem(STORAGE_KEYS.lang) || 'en'; } catch (e) {}
+  let state = loadRates(localStorage);
+  let rates = state.rates;
+
+  function curName(c) { return lang === 'bn' ? c.bn : c.name; }
+
+  function fillSelects() {
+    for (const [id, keep] of [['fromCur', $('fromCur').value || 'USD'], ['toCur', $('toCur').value || 'BDT']]) {
+      const sel = $(id);
+      sel.innerHTML = '';
+      for (const c of CURRENCIES) {
+        const o = document.createElement('option');
+        o.value = c.code;
+        o.textContent = c.code + ' — ' + curName(c);
+        sel.appendChild(o);
+      }
+      sel.value = keep;
+    }
+  }
+
+  function renderBoard() {
+    const tb = $('rateBody');
+    tb.innerHTML = '';
+    for (const c of CURRENCIES) {
+      if (c.code === 'BDT') continue;
+      const tr = document.createElement('tr');
+      const codeTd = document.createElement('td');
+      codeTd.innerHTML = '<strong>' + c.code + '</strong>';
+      const nameTd = document.createElement('td');
+      nameTd.textContent = curName(c);
+      const rateTd = document.createElement('td');
+      const inp = document.createElement('input');
+      inp.type = 'text'; inp.inputmode = 'decimal';
+      inp.className = 'rate-input';
+      inp.dataset.code = c.code;
+      inp.value = rates[c.code];
+      inp.setAttribute('aria-label', c.code + ' rate');
+      inp.addEventListener('change', onRateChange);
+      rateTd.appendChild(inp);
+      tr.appendChild(codeTd); tr.appendChild(nameTd); tr.appendChild(rateTd);
+      tb.appendChild(tr);
+    }
+  }
+
+  function onRateChange(e) {
+    const inp = e.target;
+    const code = inp.dataset.code;
+    if (!validRate(inp.value)) {
+      $('rateError').textContent = STR[lang].invalidRate;
+      $('rateError').hidden = false;
+      inp.value = rates[code];
+      inp.focus();
+      return;
+    }
+    $('rateError').hidden = true;
+    rates[code] = Math.round(Number(inp.value) * 10000) / 10000;
+    saveRates(localStorage, rates);
+    $('updatedStamp').textContent = localStorage.getItem(STORAGE_KEYS.updated) || STR[lang].never;
+    recalc();
+  }
+
+  function recalc() {
+    const amt = $('amount').value;
+    const from = $('fromCur').value, to = $('toCur').value;
+    const err = $('amountError');
+    if (!validAmount(amt)) {
+      err.textContent = STR[lang].invalidAmount;
+      err.hidden = false;
+      $('result').textContent = '—';
+      $('rateLine').textContent = '';
+      return;
+    }
+    err.hidden = true;
+    const a = Number(String(amt).trim().replace(/,/g, ''));
+    const res = convert(a, from, to, rates);
+    const fa = lang === 'bn' ? toBnDigits(a.toLocaleString('en-US')) : a.toLocaleString('en-US');
+    $('result').textContent = STR[lang].resultLine(fa, from, formatMoney(res, lang), to);
+    const r1 = formatMoney(getRate(rates, from), lang);
+    const r2 = formatMoney(getRate(rates, to), lang);
+    $('rateLine').textContent = STR[lang].rateLine(r1, from, r2, to);
+  }
+
+  function applyLang() {
+    const s = STR[lang];
+    document.documentElement.lang = lang === 'bn' ? 'bn' : 'en';
+    $('t-title').textContent = s.title;
+    $('t-subtitle').textContent = s.subtitle;
+    $('t-converter').textContent = s.converter;
+    $('t-amount').textContent = s.amount;
+    $('t-from').textContent = s.from;
+    $('t-to').textContent = s.to;
+    $('t-rateBoard').textContent = s.rateBoard;
+    $('t-rateBoardSub').textContent = s.rateBoardSub;
+    $('t-updated').textContent = s.updated;
+    $('t-disclaimer').textContent = s.disclaimer;
+    $('resetBtn').textContent = s.reset;
+    $('exportBtn').textContent = s.export;
+    $('importBtn').textContent = s.import;
+    $('langBtn').textContent = s.langBtn;
+    $('swapBtn').title = s.swap;
+    $('swapBtn').setAttribute('aria-label', s.swap);
+    const upd = localStorage.getItem(STORAGE_KEYS.updated);
+    $('updatedStamp').textContent = upd ? (lang === 'bn' ? toBnDigits(upd) : upd) : s.never;
+    fillSelects();
+    renderBoard();
+    recalc();
+    try { localStorage.setItem(STORAGE_KEYS.lang, lang); } catch (e) {}
+  }
+
+  $('amount').addEventListener('input', recalc);
+  $('fromCur').addEventListener('change', recalc);
+  $('toCur').addEventListener('change', recalc);
+  $('swapBtn').addEventListener('click', () => {
+    const f = $('fromCur'), t = $('toCur');
+    const tmp = f.value; f.value = t.value; t.value = tmp;
+    recalc();
+  });
+  $('langBtn').addEventListener('click', () => { lang = lang === 'en' ? 'bn' : 'en'; applyLang(); });
+  $('resetBtn').addEventListener('click', () => {
+    rates = defaultRates();
+    saveRates(localStorage, rates);
+    applyLang();
+  });
+  $('exportBtn').addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify({ rates, exported: new Date().toISOString() }, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'currency-converter-bd-rates.json';
+    document.body.appendChild(a); a.click(); a.remove();
+  });
+  $('importBtn').addEventListener('click', () => $('importFile').click());
+  $('importFile').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const data = JSON.parse(rd.result);
+        const obj = data.rates || data;
+        const next = defaultRates();
+        let ok = false;
+        for (const c of CURRENCIES) {
+          if (c.code === 'BDT') continue;
+          const v = Number(obj[c.code]);
+          if (Number.isFinite(v) && v > 0) { next[c.code] = v; ok = true; }
+        }
+        if (!ok) throw new Error('bad');
+        rates = next;
+        saveRates(localStorage, rates);
+        applyLang();
+      } catch (err) {
+        $('rateError').textContent = STR[lang].importBad;
+        $('rateError').hidden = false;
+      }
+      e.target.value = '';
+    };
+    rd.readAsText(f);
+  });
+
+  applyLang();
+})();
+</script>
+</body>
+</html>
